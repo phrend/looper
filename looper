@@ -1,0 +1,373 @@
+#!/bin/bash
+
+################################################################################
+# [description]
+#   (see usage function below)
+#
+# [changelog]
+#   2016/07/24 : fairly big feature overhaul and cleanup
+#                - added -l option
+#                - added success/fail counts at the end (still want real-time)
+#                - added logging of loop/command files
+#                - updated formatting of default output
+#                - renamed log dir and log files
+#                - added protective restrictions to log cleanup
+#   2016/07/02 : initial script
+#
+# [possible enhancements]
+#  - add an arg so you can directly pass a command (for one-liners)
+#  - add ability to display/log ssh's exit status (show success/failures)
+#  - add a timeout that will kill hung connections
+#  - allow the command file to include config params
+#      maybe have the app split the original .loop file in to
+#      <blah>.config and <blah>.loop and then use those
+#  - save the full command-line to <blah>.cmd (so you could run it again)
+#      this would not include the alh regex's - it would be a long server list
+#  - consider changing -c to a positional argument, since it's required
+#  - silent option - only the command output is sent to stdout (for scripting)
+#  - find a nice way to output progress/how many servers are remaining
+#  - show the calculated duration at the end
+#  - show error and total server count while looping
+#  - better handling of the log files
+#    - option to only keep the summary log? or no logs at all?
+#    - add an arg to define the log retention time
+#  - add a function for isDebug() to clean the code up a bit
+#  - allow for a config file to set options
+################################################################################
+
+usage() {
+  cat << EOF
+
+SYNOPSIS
+    $SCRIPTNAME [-c command_file] [-d] [-h] [-l login_name] [-m max_connections]
+                [-o prefix|raw] [-s ssh_options] [-t ssh_timeout] fqdn1 [fqdnN]
+
+DESCRIPTION
+    This is a script to connect to multiple servers, via ssh, in parallel, run
+    remote commands, and log the output.
+
+OPTIONS
+    -c                     The path to the config/command file (required)
+    -d                     Dry-run (just show what would have been done)
+    -h                     Print this help message
+    -l login_name          Specifies the user to log in as on the remote machine
+    -m max_connections     The max number of simultaneous connections to run
+                             (default: 25)
+    -o output_format       Sets the output format:
+                             default : output with separating lines (default)
+                              prefix : prefix all output with the 'fqdn: '
+                                 raw : just the raw server output
+    -s ssh_options         Additional ssh arguments you want to set (like -t)
+                             (they must be wrapped in quotes)
+                             note: if you use -t, remember to include 'exit'
+                             at the end of your command file)
+    -t ssh_timeout         The ssh connecttimeout value (in seconds)
+                             (default: 20)
+
+    The final argument(s) must be space separated fqdn's, like:
+      fqdn1 fqdn2 fqdn3
+
+EXAMPLES
+    $SCRIPTNAME -c commands.looper fqdn1 fadn2
+    $SCRIPTNAME -s '-t' -m 10 -o prefix -t 5 -c commands.looper fqdn1 fadn2
+    $SCRIPTNAME -d -c commands.looper fqdn1 fadn2
+
+EOF
+}
+
+
+################################################################################
+# variables that users should not change
+################################################################################
+SCRIPTNAME="$(basename $0)"
+ALL_ARGS="$@"
+DATESTAMP_START=$(date "+%Y%m%d_%H%M%S")
+DATESTAMP_START_HUMAN="$(date)"
+SSH_ATTEMPT_CNT=0
+SSH_SUCCESS_CNT=0
+SSH_FAIL_CNT=0
+SERVER_INDEX=0
+
+
+################################################################################
+# variables that set config defaults (cli args may override these)
+################################################################################
+COMMAND_FILE=""
+DRYRUN="false"
+LOGIN_USER="$USER"
+MAX_CONNECTIONS=25
+OUTPUT_FORMAT="default"
+SSH_OPTIONS=""
+SSH_TIMEOUT=20
+
+
+################################################################################
+# functions
+################################################################################
+# check to see if a value is an integer
+isInt() {
+  if [[ "$1" =~ ^[0-9]+$ ]] ; then
+    true
+  else
+    false
+  fi
+}
+
+# check to see how many bg'd procs we have (open ssh connections)
+openConn() {
+    OPEN_CONN="$(jobs -rp | wc -l)"
+    echo "$OPEN_CONN"
+}
+
+
+################################################################################
+# arg parsing
+################################################################################
+while getopts ":c:dhl:m:o:s:t:" OPTNAME; do
+  case "$OPTNAME" in
+    "c")
+      if [ ! -f "$OPTARG" ] || [ ! -r "$OPTARG"  ]; then
+        echo "ERROR: -c argument value [$OPTARG] is not a file you have read permissions on" >&2
+        usage
+        exit 1
+      fi
+      COMMAND_FILE="$OPTARG"
+      ;;
+    "d")
+      DRYRUN="true"
+      ;;
+    "h")
+      usage
+      exit 0
+      ;;
+    "l")
+      LOGIN_USER="$OPTARG"
+      ;;
+    "m")
+      # validate input
+      if ! $(isInt "$OPTARG"); then
+        echo "ERROR: -m argument value [$OPTARG] is not a number" >&2
+        usage
+        exit 1
+      fi
+      MAX_CONNECTIONS="$OPTARG"
+      ;;
+    "o")
+      OUTPUT_FORMAT="$OPTARG"
+      ;;
+    "s")
+      SSH_OPTIONS="$OPTARG"
+      ;;
+    "t")
+      # validate input
+      if ! $(isInt "$OPTARG"); then
+        echo "ERROR: -t argument value [$OPTARG] is not a number" >&2
+        usage
+        exit 1
+      fi
+      TIME="$OPTARG"
+      ;;
+    "?")
+      echo "ERROR: Unknown option -$OPTARG" >&2
+      exit 1
+      ;;
+    ":")
+      echo "ERROR: No argument value for option -$OPTARG" >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: Unknown error while processing options" >&2
+      exit 1
+      ;;
+  esac
+done
+shift $(($OPTIND - 1))
+# at this point, $1 is the next arg on the stack, $@ are all remaining args
+
+SERVERS=$@
+
+if [ -z "$COMMAND_FILE" ]; then
+  echo "ERROR: You must specify a command file [-c command_file]"
+  usage
+  exit 1
+fi
+
+if [ $# -eq 0 ]; then
+  echo "ERROR: You didn't pass any fqdn's" >&2
+  usage
+  exit 1
+fi
+
+
+################################################################################
+# variables (this section is here because some must be set after arg parsing)
+################################################################################
+LOG_DIR=~/.${SCRIPTNAME}_logs
+LOG_PREFIX="$LOG_DIR/$(basename $COMMAND_FILE).$DATESTAMP_START"
+REPLAY_LOG="${LOG_PREFIX}_replay.log"
+FULL_LOG="${LOG_PREFIX}_full.log"
+CMD_LOG="${LOG_PREFIX}.loop"
+
+
+################################################################################
+# main
+################################################################################
+# disable background task monitoring (hide yucky output from the terminal)
+set +m
+
+# validate/create log dir
+if [ ! -d $LOG_DIR ]; then
+  mkdir $LOG_DIR
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Unable to create the log dir ($LOG_DIR)"
+    exit 1
+  fi
+fi
+
+# save the cli command that launched this script (so you could re-run it later)
+echo "cd $(pwd) && $SCRIPTNAME $ALL_ARGS" > $REPLAY_LOG
+
+echo ""
+echo "commands $([ "$DRYRUN" == "true" ] && echo "(DRYRUN)"):"
+echo "################################################################################"
+cat "$COMMAND_FILE"
+echo "################################################################################"
+echo ""
+
+# copy the commands to the CMD_LOG (in the future, i may include options in the file,
+# so this is where i could strip them out with grep or something
+[ "$DRYRUN" != "true" ] && cat "$COMMAND_FILE" > "$CMD_LOG"
+
+SERVER_COUNT=$(echo $SERVERS | wc -w | sed 's/^[ \t]*//')
+echo "server count: $SERVER_COUNT"
+echo "spawning ssh sessions $([ "$DRYRUN" == "true" ] && echo "(DRYRUN)")..."
+WAIT_FLAG=0
+for SERVER in $SERVERS; do
+  SERVER_LOG="${LOG_PREFIX}.$SERVER.log"
+  if [ $WAIT_FLAG -ne 0 ]; then
+    echo ""
+  fi
+  echo " + $SERVER ($SERVER_LOG)"
+  if [ "$DRYRUN" == "false" ]; then
+
+    # the ssh statement is wrapped in an if statement so that i can easily
+    # catch the exit status of the backgrounded process - if it's 255, that
+    # means it's an ssh failure (ssh exits with the exit status of the remote
+    # command or with 255 if an error occurred)
+    # TODO: refactor this to send the exit status to a case statement so that
+    # i can parse the output for any status code, and act accordingly like,
+    # having the ability to output the exit status in the cli output/log
+    if [ $( ssh $SSH_OPTIONS \
+              -t \
+              -q \
+              -oconnecttimeout=${SSH_TIMEOUT} \
+              -oBatchMode=yes \
+              -oStrictHostKeyChecking=no \
+              -l $LOGIN_USER \
+              $SERVER < $COMMAND_FILE >> $SERVER_LOG 2>&1 ; echo "$?") -eq 255 ]; then
+      echo "SSH_CONNECTION_ERROR" >> $SERVER_LOG
+   # these vars can't be calculated in real time like this, since the ssh is background'd
+   #  (( SSH_FAIL_CNT++ ))
+   #else
+   #  (( SSH_SUCCESS_CNT++ ))
+    fi &
+
+    # this was initially a stand alone script, using a HEREDOC for commands but
+    # i switched to using external command files - i'm just leaving this here in
+    # case i ever want to write an all-in-one script again someday
+    #ssh $SSH_OPTIONS -t -q -oconnecttimeout=${SSH_TIMEOUT} -oBatchMode=yes -oStrictHostKeyChecking=no -l root $SERVER << "EOF" >> $SERVER_LOG 2>&1 || echo "CONNECTION ERROR" >> $SERVER_LOG &
+###### START OF REMOTE COMMANDS #####
+#uptime
+###### END OF REMOTE COMMANDS #####
+#EOF
+    ((SERVER_INDEX++))
+    # limit the number of concurrent connections
+    WAIT_FLAG=0
+    while [ $(openConn) -ge $MAX_CONNECTIONS ]; do
+      sleep 1
+      if [ $WAIT_FLAG -eq 0 ]; then
+        WAIT_FLAG=1
+        echo -n "connection limit [$MAX_CONNECTIONS] reached"
+        echo -n ", [$SERVER_INDEX/$SERVER_COUNT] attempted"
+        #echo -n ", [s:$SSH_SUCCESS_CNT,f:$SSH_FAIL_CNT]"
+        echo -n " (sleeping)"
+      fi
+      echo -n "."
+    done
+  fi
+done
+
+if [ "$DRYRUN" == "false" ]; then
+  # wait for all connections to complete
+  echo ""
+  echo -n "waiting for connections to complete..."
+  while [ $(openConn) -gt 0 ]; do sleep 1; echo -n "."; done
+  echo ""
+
+  # display the output logs
+  echo ""
+  echo "output:"
+  echo "################################################################################"
+  echo ""
+  for LOG_FILE in $LOG_PREFIX.*.log; do
+    # ignore the full log file (i'm not sure why it exists at this point?)
+#    if [ "$LOG_FILE" == "$FULL_LOG" ]; then continue; fi
+    FQDN=$(echo $LOG_FILE | sed "s|$LOG_PREFIX.\(.*\).log|\1|")
+    case "$OUTPUT_FORMAT" in
+      raw)
+        cat $LOG_FILE
+        ;;
+      prefix)
+        cat $LOG_FILE | sed "s/^/$FQDN: /"
+        ;;
+      *)
+        echo '┌──────────────────────────────────────────────────────────────────────────────┐'
+        #echo '  .--------------------------------------------------------------------------.'
+        #BORDER='                                                                              \'
+        BORDER='                                                                              │'
+        FQDN_LEN=${#FQDN}
+        # 24 is the number of characters before the echo prints $FQDN below
+        # to indent it further, you would add however many spaces in front of it in the
+        # echo, and then change the 24 to be 24 + however many spaces you added
+        POS=$(( 24 + FQDN_LEN ))
+        #echo "/                        $FQDN${BORDER:POS}"
+        echo "│                        $FQDN${BORDER:POS}"
+        cat $LOG_FILE
+        #echo '\                                                                              /'
+        #echo "  '--------------------------------------------------------------------------'"
+        echo '│                                                                              │'
+        echo '└──────────────────────────────────────────────────────────────────────────────┘'
+        echo ""
+        ;;
+    esac
+  done | tee $FULL_LOG
+  echo "################################################################################"
+fi
+echo ""
+
+# i would rather calculate these metrics as the script is looping, but because
+# of the process bg'ing, it's not as simple as i would like. here's my temp hack
+SSH_FAIL_CNT="$(grep SSH_CONNECTION_ERROR $FULL_LOG | wc -l | sed 's/^[ \t]*//')"
+SSH_SUCCESS_CNT=$((SERVER_COUNT - SSH_FAIL_CNT))
+
+DATESTAMP_END_HUMAN="$(date)"
+echo "    start time: $DATESTAMP_START_HUMAN"
+echo "      end time: $DATESTAMP_END_HUMAN"
+echo ""
+echo "total servers : $SERVER_COUNT"
+echo "  ssh success : $SSH_SUCCESS_CNT"
+echo " ssh failures : $SSH_FAIL_CNT"
+echo ""
+echo "    replay log: $REPLAY_LOG"
+echo "   command log: $CMD_LOG"
+echo "   server logs: $LOG_PREFIX.*.log"
+echo "      full log: $FULL_LOG"
+
+# log dir housekeeping (with some error checking to prevent mass destruction if
+# the log dir is mistakenly set to something stupid)
+if [ $(echo $LOG_DIR | grep -c "$SCRIPTNAME") -gt 0 ]; then
+  find $LOG_DIR -type f \( -name "*.log" -o -name "*.loop" \) -maxdepth 1 -mtime +30 -delete
+fi
+
+# disabled earlier, so enable background task monitoring
+set -m
