@@ -17,7 +17,6 @@
 # [possible enhancements]
 #  - add an arg so you can directly pass a command (for one-liners)
 #  - add ability to display/log ssh's exit status (show success/failures)
-#  - add a timeout that will kill hung connections
 #  - allow the command file to include config params
 #      maybe have the app split the original .loop file in to
 #      <blah>.config and <blah>.loop and then use those
@@ -33,14 +32,16 @@
 #    - add an arg to define the log retention time
 #  - add a function for isDebug() to clean the code up a bit
 #  - allow for a config file to set options
+#  - append error in server's log when proc is killed via killOldProcs()
 ################################################################################
 
 usage() {
   cat << EOF
 
 SYNOPSIS
-    $SCRIPTNAME [-c command_file] [-d] [-h] [-l login_name] [-m max_connections]
-                [-o prefix|raw] [-s ssh_options] [-t ssh_timeout] fqdn1 [fqdnN]
+    $SCRIPTNAME [-c command_file] [-d] [-h] [-k proc_timeout] [-l login_name]
+                [-m max_connections] [-o prefix|raw] [-s ssh_options]
+                [-t ssh_timeout] fqdn1 [fqdnN]
 
 DESCRIPTION
     This is a script to connect to multiple servers, via ssh, in parallel, run
@@ -50,6 +51,8 @@ OPTIONS
     -c                     The path to the config/command file (required)
     -d                     Dry-run (just show what would have been done)
     -h                     Print this help message
+    -k proc_timeout        Kill stale procs after <proc_timeout> seconds
+                             (default: 600)
     -l login_name          Specifies the user to log in as on the remote machine
     -m max_connections     The max number of simultaneous connections to run
                              (default: 25)
@@ -61,7 +64,7 @@ OPTIONS
                              (they must be wrapped in quotes)
                              note: if you use -t, remember to include 'exit'
                              at the end of your command file)
-    -t ssh_timeout         The ssh connecttimeout value (in seconds)
+    -t connecttimeout      The ssh connecttimeout value (in seconds)
                              (default: 20)
 
     The final argument(s) must be space separated fqdn's, like:
@@ -97,6 +100,7 @@ DRYRUN="false"
 LOGIN_USER="$USER"
 MAX_CONNECTIONS=25
 OUTPUT_FORMAT="default"
+PROC_AGE_MAX_SEC=$((10*60))
 SSH_OPTIONS=""
 SSH_TIMEOUT=20
 
@@ -113,6 +117,20 @@ isInt() {
   fi
 }
 
+# kill procs older than $PROC_AGE_MAX_SEC (in seconds)
+killOldProcs() {
+  local PROC
+  local PROC_AGE_SEC
+  for PROC in $(jobs -p); do
+    PROC_AGE_SEC=$(ps -p $PROC -o etime= | tr '-' ':' | awk -F: '{ total=0; m=1; } { for (i=0; i < NF; i++) {total += $(NF-i)*m; m *= i >= 2 ? 24 : 60 }} {print total}')
+    if [ $PROC_AGE_SEC -gt $PROC_AGE_MAX_SEC ]; then
+      kill $1 $PROC
+      # TODO: parse the proc's args to extract the hostname so i can append
+      #       an error message to the server's log file
+    fi
+  done
+}
+
 # check to see how many bg'd procs we have (open ssh connections)
 openConn() {
     OPEN_CONN="$(jobs -rp | wc -l)"
@@ -123,7 +141,7 @@ openConn() {
 ################################################################################
 # arg parsing
 ################################################################################
-while getopts ":c:dhl:m:o:s:t:" OPTNAME; do
+while getopts ":c:dhk:l:m:o:s:t:" OPTNAME; do
   case "$OPTNAME" in
     "c")
       if [ ! -f "$OPTARG" ] || [ ! -r "$OPTARG"  ]; then
@@ -139,6 +157,15 @@ while getopts ":c:dhl:m:o:s:t:" OPTNAME; do
     "h")
       usage
       exit 0
+      ;;
+    "k")
+      # validate input
+      if ! $(isInt "$OPTARG"); then
+        echo "ERROR: -k argument value [$OPTARG] is not a number" >&2
+        usage
+        exit 1
+      fi
+      PROC_AGE_MAX_SEC="$OPTARG"
       ;;
     "l")
       LOGIN_USER="$OPTARG"
@@ -295,13 +322,20 @@ for SERVER in $SERVERS; do
       echo -n "."
     done
   fi
+  # kill stale procs
+  killOldProcs
 done
 
 if [ "$DRYRUN" == "false" ]; then
   # wait for all connections to complete
   echo ""
   echo -n "waiting for connections to complete..."
-  while [ $(openConn) -gt 0 ]; do sleep 1; echo -n "."; done
+  while [ $(openConn) -gt 0 ]; do
+    sleep 1
+    echo -n "."
+    # force-kill stale procs
+    killOldProcs -9
+  done
   echo ""
 
   # display the output logs
