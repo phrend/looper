@@ -131,7 +131,7 @@ killOldProcs() {
       # http://stackoverflow.com/questions/5719030/bash-silently-kill-background-function-process
       # i'm wondering if i should do a kill -9 to prevent possible hanging?
       { kill $PROC && wait $PROC; } 2>/dev/null
-      echo "PROCCESS_TIMEOUT_ERROR" >> $SERVER_LOG
+      echo "PROCCESS_TIMEOUT_ERROR" >> ${LOG_PREFIX}.$SERVER.log"
     fi
   done
 }
