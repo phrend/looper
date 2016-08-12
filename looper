@@ -121,12 +121,17 @@ isInt() {
 killOldProcs() {
   local PROC
   local PROC_AGE_SEC
-  for PROC in $(jobs -p); do
+  local SERVER
+  for PROC in $(jobs -rp); do
     PROC_AGE_SEC=$(ps -p $PROC -o etime= | tr '-' ':' | awk -F: '{ total=0; m=1; } { for (i=0; i < NF; i++) {total += $(NF-i)*m; m *= i >= 2 ? 24 : 60 }} {print total}')
     if [ $PROC_AGE_SEC -gt $PROC_AGE_MAX_SEC ]; then
-      kill $1 $PROC
-      # TODO: parse the proc's args to extract the hostname so i can append
-      #       an error message to the server's log file
+      SERVER="$(ps -o args= -p $PROC | awk '{print $NF}')"
+      echo -n "[killing $SERVER]"
+      # kill is run like this to prevent the kill message from being output
+      # http://stackoverflow.com/questions/5719030/bash-silently-kill-background-function-process
+      # i'm wondering if i should do a kill -9 to prevent possible hanging?
+      { kill $PROC && wait $PROC; } 2>/dev/null
+      echo "PROCCESS_TIMEOUT_ERROR" >> $SERVER_LOG
     fi
   done
 }
@@ -299,14 +304,6 @@ for SERVER in $SERVERS; do
    #  (( SSH_SUCCESS_CNT++ ))
     fi &
 
-    # this was initially a stand alone script, using a HEREDOC for commands but
-    # i switched to using external command files - i'm just leaving this here in
-    # case i ever want to write an all-in-one script again someday
-    #ssh $SSH_OPTIONS -t -q -oconnecttimeout=${SSH_TIMEOUT} -oBatchMode=yes -oStrictHostKeyChecking=no -l root $SERVER << "EOF" >> $SERVER_LOG 2>&1 || echo "CONNECTION ERROR" >> $SERVER_LOG &
-###### START OF REMOTE COMMANDS #####
-#uptime
-###### END OF REMOTE COMMANDS #####
-#EOF
     ((SERVER_INDEX++))
     # limit the number of concurrent connections
     WAIT_FLAG=0
@@ -333,8 +330,8 @@ if [ "$DRYRUN" == "false" ]; then
   while [ $(openConn) -gt 0 ]; do
     sleep 1
     echo -n "."
-    # force-kill stale procs
-    killOldProcs -9
+    # kill stale procs
+    killOldProcs
   done
   echo ""
 
