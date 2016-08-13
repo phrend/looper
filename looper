@@ -4,35 +4,7 @@
 # [description]
 #   (see usage function below)
 #
-# [changelog]
-#   2016/07/24 : fairly big feature overhaul and cleanup
-#                - added -l option
-#                - added success/fail counts at the end (still want real-time)
-#                - added logging of loop/command files
-#                - updated formatting of default output
-#                - renamed log dir and log files
-#                - added protective restrictions to log cleanup
-#   2016/07/02 : initial script
-#
-# [possible enhancements]
-#  - add an arg so you can directly pass a command (for one-liners)
-#  - add ability to display/log ssh's exit status (show success/failures)
-#  - allow the command file to include config params
-#      maybe have the app split the original .loop file in to
-#      <blah>.config and <blah>.loop and then use those
-#  - save the full command-line to <blah>.cmd (so you could run it again)
-#      this would not include the alh regex's - it would be a long server list
-#  - consider changing -c to a positional argument, since it's required
-#  - silent option - only the command output is sent to stdout (for scripting)
-#  - find a nice way to output progress/how many servers are remaining
-#  - show the calculated duration at the end
-#  - show error and total server count while looping
-#  - better handling of the log files
-#    - option to only keep the summary log? or no logs at all?
-#    - add an arg to define the log retention time
-#  - add a function for isDebug() to clean the code up a bit
-#  - allow for a config file to set options
-#  - append error in server's log when proc is killed via killOldProcs()
+#   source: https://github.com/phrend/looper
 ################################################################################
 
 usage() {
@@ -131,7 +103,7 @@ killOldProcs() {
       # http://stackoverflow.com/questions/5719030/bash-silently-kill-background-function-process
       # i'm wondering if i should do a kill -9 to prevent possible hanging?
       { kill $PROC && wait $PROC; } 2>/dev/null
-      echo "PROCCESS_TIMEOUT_ERROR" >> ${LOG_PREFIX}.$SERVER.log"
+      echo "PROCCESS_TIMEOUT_ERROR" >> "${LOG_PREFIX}.$SERVER.log"
     fi
   done
 }
@@ -296,8 +268,8 @@ for SERVER in $SERVERS; do
               -oBatchMode=yes \
               -oStrictHostKeyChecking=no \
               -l $LOGIN_USER \
-              $SERVER < $COMMAND_FILE >> $SERVER_LOG 2>&1 ; echo "$?") -eq 255 ]; then
-      echo "SSH_CONNECTION_ERROR" >> $SERVER_LOG
+              $SERVER < $COMMAND_FILE >> "$SERVER_LOG" 2>&1 ; echo "$?") -eq 255 ]; then
+      echo "SSH_CONNECTION_ERROR" >> "$SERVER_LOG"
    # these vars can't be calculated in real time like this, since the ssh is background'd
    #  (( SSH_FAIL_CNT++ ))
    #else
