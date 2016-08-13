@@ -58,6 +58,8 @@ SCRIPTNAME="$(basename $0)"
 ALL_ARGS="$@"
 DATESTAMP_START=$(date "+%Y%m%d_%H%M%S")
 DATESTAMP_START_HUMAN="$(date)"
+PROC_FAIL_CNT=0
+PROC_SUCCESS_CNT=0
 SSH_ATTEMPT_CNT=0
 SSH_SUCCESS_CNT=0
 SSH_FAIL_CNT=0
@@ -350,16 +352,18 @@ echo ""
 
 # i would rather calculate these metrics as the script is looping, but because
 # of the process bg'ing, it's not as simple as i would like. here's my temp hack
-SSH_FAIL_CNT="$(grep SSH_CONNECTION_ERROR $FULL_LOG | wc -l | sed 's/^[ \t]*//')"
+SSH_FAIL_CNT="$(grep "SSH_CONNECTION_ERROR" $FULL_LOG | wc -l | sed 's/^[ \t]*//')"
+PROC_FAIL_CNT="$(grep "PROCCESS_TIMEOUT_ERROR" $FULL_LOG | wc -l | sed 's/^[ \t]*//')"
 SSH_SUCCESS_CNT=$((SERVER_COUNT - SSH_FAIL_CNT))
+PROC_SUCCESS_CNT=$((SERVER_COUNT - PROC_FAIL_CNT))
+TOTAL_SUCCESS_CNT=$((SSH_SUCCESS_CNT - PROC_FAIL_CNT))
 
 DATESTAMP_END_HUMAN="$(date)"
-echo "    start time: $DATESTAMP_START_HUMAN"
-echo "      end time: $DATESTAMP_END_HUMAN"
+echo "start time: $DATESTAMP_START_HUMAN"
+echo "  end time: $DATESTAMP_END_HUMAN"
 echo ""
-echo "total servers : $SERVER_COUNT"
-echo "  ssh success : $SSH_SUCCESS_CNT"
-echo " ssh failures : $SSH_FAIL_CNT"
+echo " ssh_success: $SSH_SUCCESS_CNT  proc_success: $PROC_SUCCESS_CNT total_servers: $SERVER_COUNT
+       ssh_failures: $SSH_FAIL_CNT    proc_failures: $PROC_FAIL_CNT   total_success: $TOTAL_SUCCESS_CNT" | column -t
 echo ""
 echo "    replay log: $REPLAY_LOG"
 echo "   command log: $CMD_LOG"

@@ -40,8 +40,8 @@ EXAMPLES
     looper -s '-t' -m 10 -o prefix -t 5 -c commands.looper fqdn1 fadn2
     looper -d -c commands.looper fqdn1 fadn2
 ```
-# Bugs
-1. PROCCESS_TIMEOUT_ERROR is not currently, but should be considered an error (have to decide if i want to tally these on their own, or what?)
+# Known Bugs
+<no known bugs, but there probably are some!>
 
 # Possible Enhancements
 1. add an arg so you can directly pass a command (for one-liners)
