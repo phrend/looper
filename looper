@@ -91,11 +91,6 @@ isInt() {
   fi
 }
 
-#
-# TODO: when there are lots of procs, this adds too much time
-#       need to make it only run once every N times through the loop
-#       or come up with some other throttle for it
-#
 # kill procs older than $PROC_AGE_MAX_SEC (in seconds)
 killOldProcs() {
   local PROC
@@ -302,7 +297,10 @@ for SERVER in $SERVERS; do
     done
   fi
   # kill stale procs
-  killOldProcs
+  # TODO: when there are lots of procs, this adds too much time
+  #       need to make it only run once every N times through the loop
+  #       or come up with some other throttle for it
+  #killOldProcs
 done
 
 if [ "$DRYRUN" == "false" ]; then
