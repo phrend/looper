@@ -91,6 +91,11 @@ isInt() {
   fi
 }
 
+#
+# TODO: when there are lots of procs, this adds too much time
+#       need to make it only run once every N times through the loop
+#       or come up with some other throttle for it
+#
 # kill procs older than $PROC_AGE_MAX_SEC (in seconds)
 killOldProcs() {
   local PROC
@@ -98,7 +103,10 @@ killOldProcs() {
   local SERVER
   for PROC in $(jobs -rp); do
     PROC_AGE_SEC=$(ps -p $PROC -o etime= | tr '-' ':' | awk -F: '{ total=0; m=1; } { for (i=0; i < NF; i++) {total += $(NF-i)*m; m *= i >= 2 ? 24 : 60 }} {print total}')
-    if [ $PROC_AGE_SEC -gt $PROC_AGE_MAX_SEC ]; then
+    #echo "DEBUG: PROC_AGE_SEC:$PROC_AGE_SEC PROC_AGE_MAX_SEC:$PROC_AGE_MAX_SEC"
+    # it turns out that sometimes the proc finishes before PROC_AGE_SEC is set,
+    # and it gets set to null, so protect against this by checking
+    if [ -n "$PROC_AGE_SEC" ] && [ $PROC_AGE_SEC -gt $PROC_AGE_MAX_SEC ]; then
       SERVER="$(ps -o args= -p $PROC | awk '{print $NF}')"
       echo -n "[killing $SERVER]"
       # kill is run like this to prevent the kill message from being output
