@@ -21,6 +21,8 @@ OPTIONS
     -l login_name          Specifies the user to log in as on the remote machine
     -m max_connections     The max number of simultaneous connections to run
                              (default: 25)
+    -n node_file           The path to a file containing all of the fqdn's you
+                           want to loop through
     -o output_format       Sets the output format:
                              default : output with separating lines (default)
                               prefix : prefix all output with the 'fqdn: '
@@ -45,24 +47,22 @@ EXAMPLES
 
 # Possible Enhancements
 1. add an arg so you can directly pass a command (for one-liners)
-2. add ability to display/log ssh's exit status (show success/failures)
-3. allow for a config file to set options
-4. allow the command file to include config params
-5. maybe have the app split the original .loop file in to <blah>.config and <blah>.loop and then use those
-6. save the full command-line to <blah>.cmd (so you could run it again)
-7. consider changing -c to a positional argument, since it's required
-8. silent option - only the command output is sent to stdout (for scripting)
-9. find a nice way to output progress/how many servers are remaining
-10. show the calculated duration at the end
-11. show error and total server count while looping
-12. better handling of the log files
-13. option to only keep the summary log? or no logs at all?
-14. add an arg to define the log retention time
-15. add a function for isDebug() to clean the code up a bit
-16. append error in server's log when proc is killed via killOldProcs()
+2. allow for a config file to set options
+3. allow the command file to include config params
+     maybe have the app split the original .loop file in to <blah>.config and <blah>.loop and then use those
+4. consider changing -c to a positional argument, since it's required
+5. silent option - only the command output is sent to stdout (for scripting)
+6. find a nice way to output progress/how many servers are remaining
+7. show error and total server count while looping
+8. add an arg to define the log retention time
+9. add a function for isDebug() to clean the code up a bit
+10. append error in server's log when proc is killed via killOldProcs()
 
 # Similar (better?) Tools
 [pssh] <https://code.google.com/archive/p/parallel-ssh/>
+
 [Massh] <http://m.a.tt/er/massh/>
+
 [DSH] <https://www.netfort.gr.jp/~dancer/software/dsh.html.en>
+
 [Ansible] <https://www.ansible.com/>
