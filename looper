@@ -28,6 +28,8 @@ OPTIONS
     -l login_name          Specifies the user to log in as on the remote machine
     -m max_connections     The max number of simultaneous connections to run
                              (default: 25)
+    -n node_file           The path to a file containing all of the fqdn's you
+                           want to loop through
     -o output_format       Sets the output format:
                              default : output with separating lines (default)
                               prefix : prefix all output with the 'fqdn: '
@@ -108,7 +110,7 @@ killOldProcs() {
       # http://stackoverflow.com/questions/5719030/bash-silently-kill-background-function-process
       # i'm wondering if i should do a kill -9 to prevent possible hanging?
       { kill $PROC && wait $PROC; } 2>/dev/null
-      echo "PROCCESS_TIMEOUT_ERROR" >> "${LOG_PREFIX}.$SERVER.log"
+      echo "PROCCESS_TIMEOUT_ERROR" >> "${SERVER_LOG_PREFIX}.$SERVER.log"
     fi
   done
 }
@@ -123,7 +125,7 @@ openConn() {
 ################################################################################
 # arg parsing
 ################################################################################
-while getopts ":c:dhk:l:m:o:s:t:" OPTNAME; do
+while getopts ":c:dhk:l:m:n:o:s:t:" OPTNAME; do
   case "$OPTNAME" in
     "c")
       if [ ! -f "$OPTARG" ] || [ ! -r "$OPTARG"  ]; then
@@ -161,6 +163,15 @@ while getopts ":c:dhk:l:m:o:s:t:" OPTNAME; do
       fi
       MAX_CONNECTIONS="$OPTARG"
       ;;
+    "n")
+      if [ -f $OPTARG ]; then
+        NODES="$(cat $OPTARG)"
+      else
+        echo "ERROR: -n argument value [$OPTARG] is not a file" >&2
+        usage
+        exit 1
+      fi
+      ;;
     "o")
       OUTPUT_FORMAT="$OPTARG"
       ;;
@@ -193,7 +204,19 @@ done
 shift $(($OPTIND - 1))
 # at this point, $1 is the next arg on the stack, $@ are all remaining args
 
-SERVERS=$@
+# figure out where to get the list of servers (nodes) from
+if [ -n "$NODES" ]; then
+  # if there is a node file, there should not be any fqdn args
+  if [ $# -eq 0 ]; then
+    SERVERS="$NODES"
+  else
+    echo "ERROR: You specified a node file (-n) but you also passed one or more fqdn's as arguments"
+    usage
+    exit 1
+  fi
+else
+  SERVERS=$@
+fi
 
 if [ -z "$COMMAND_FILE" ]; then
   echo "ERROR: You must specify a command file [-c command_file]"
@@ -201,7 +224,7 @@ if [ -z "$COMMAND_FILE" ]; then
   exit 1
 fi
 
-if [ $# -eq 0 ]; then
+if [ -z "$SERVERS" ]; then
   echo "ERROR: You didn't pass any fqdn's" >&2
   usage
   exit 1
@@ -213,6 +236,7 @@ fi
 ################################################################################
 LOG_DIR=~/.${SCRIPTNAME}_logs
 LOG_PREFIX="$LOG_DIR/$(basename $COMMAND_FILE).$DATESTAMP_START"
+SERVER_LOG_PREFIX="${LOG_PREFIX}_server"
 REPLAY_LOG="${LOG_PREFIX}_replay.log"
 FULL_LOG="${LOG_PREFIX}_full.log"
 CMD_LOG="${LOG_PREFIX}.loop"
@@ -252,7 +276,7 @@ echo "server count: $SERVER_COUNT"
 echo "spawning ssh sessions $([ "$DRYRUN" == "true" ] && echo "(DRYRUN)")..."
 WAIT_FLAG=0
 for SERVER in $SERVERS; do
-  SERVER_LOG="${LOG_PREFIX}.$SERVER.log"
+  SERVER_LOG="${SERVER_LOG_PREFIX}.$SERVER.log"
   if [ $WAIT_FLAG -ne 0 ]; then
     echo ""
   fi
@@ -320,10 +344,8 @@ if [ "$DRYRUN" == "false" ]; then
   echo "output:"
   echo "################################################################################"
   echo ""
-  for LOG_FILE in $LOG_PREFIX.*.log; do
-    # ignore the full log file (i'm not sure why it exists at this point?)
-#    if [ "$LOG_FILE" == "$FULL_LOG" ]; then continue; fi
-    FQDN=$(echo $LOG_FILE | sed "s|$LOG_PREFIX.\(.*\).log|\1|")
+  for LOG_FILE in $SERVER_LOG_PREFIX.*.log; do
+    FQDN=$(echo $LOG_FILE | sed "s|$SERVER_LOG_PREFIX.\(.*\).log|\1|")
     case "$OUTPUT_FORMAT" in
       raw)
         cat $LOG_FILE
@@ -373,12 +395,15 @@ echo " ssh_success: $SSH_SUCCESS_CNT  proc_success: $PROC_SUCCESS_CNT total_serv
 echo ""
 echo "    replay log: $REPLAY_LOG"
 echo "   command log: $CMD_LOG"
-echo "   server logs: $LOG_PREFIX.*.log"
+echo "   server logs: $SERVER_LOG_PREFIX.*.log"
 echo "      full log: $FULL_LOG"
 
 # log dir housekeeping (with some error checking to prevent mass destruction if
 # the log dir is mistakenly set to something stupid)
 if [ $(echo $LOG_DIR | grep -c "$SCRIPTNAME") -gt 0 ]; then
+  # prune the individual server logs
+  find $LOG_DIR -type f -name "*_server.*.log" -maxdepth 1 -mtime +60m -delete
+  # prune all other logs
   find $LOG_DIR -type f \( -name "*.log" -o -name "*.loop" \) -maxdepth 1 -mtime +30 -delete
 fi
 
