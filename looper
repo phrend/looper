@@ -185,7 +185,7 @@ while getopts ":c:dhk:l:m:n:o:s:t:" OPTNAME; do
         usage
         exit 1
       fi
-      TIME="$OPTARG"
+      SSH_TIMEOUT="$OPTARG"
       ;;
     "?")
       echo "ERROR: Unknown option -$OPTARG" >&2
@@ -325,6 +325,8 @@ for SERVER in $SERVERS; do
   #       need to make it only run once every N times through the loop
   #       or come up with some other throttle for it
   #killOldProcs
+  # i should try this at some point, unless i come up with a better way?
+  #((SERVER_INDEX % 50 == 0)) && killOldProcs
 done
 
 if [ "$DRYRUN" == "false" ]; then
@@ -402,9 +404,9 @@ echo "      full log: $FULL_LOG"
 # the log dir is mistakenly set to something stupid)
 if [ $(echo $LOG_DIR | grep -c "$SCRIPTNAME") -gt 0 ]; then
   # prune the individual server logs
-  find $LOG_DIR -type f -name "*_server.*.log" -maxdepth 1 -mtime +60m -delete
+  find $LOG_DIR -maxdepth 1 -type f -name "*_server.*.log" -mmin +60 -delete
   # prune all other logs
-  find $LOG_DIR -type f \( -name "*.log" -o -name "*.loop" \) -maxdepth 1 -mtime +30 -delete
+  find $LOG_DIR -maxdepth 1 -type f \( -name "*.log" -o -name "*.loop" \) -mtime +30 -delete
 fi
 
 # disabled earlier, so enable background task monitoring
