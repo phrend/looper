@@ -5,7 +5,7 @@ Looper is a looping (and parallel) ssh utility that allows you to specify the us
 ```
 SYNOPSIS
     looper [-c command_file] [-d] [-h] [-k proc_timeout] [-l login_name]
-                [-m max_connections] [-o prefix|raw] [-s ssh_options]
+                [-m max_connections] [-M] [-o prefix|raw] [-s ssh_options]
                 [-t ssh_timeout] fqdn1 [fqdnN]
 
 DESCRIPTION
@@ -21,6 +21,8 @@ OPTIONS
     -l login_name          Specifies the user to log in as on the remote machine
     -m max_connections     The max number of simultaneous connections to run
                              (default: 25)
+    -M                     Include the remote login MOTD/banner in the output
+                             (by default it is stripped out)
     -n node_file           The path to a file containing all of the fqdn's you
                            want to loop through
     -o output_format       Sets the output format:

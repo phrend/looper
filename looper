@@ -12,7 +12,7 @@ usage() {
 
 SYNOPSIS
     $SCRIPTNAME [-c command_file] [-d] [-h] [-k proc_timeout] [-l login_name]
-                [-m max_connections] [-o prefix|raw] [-s ssh_options]
+                [-m max_connections] [-M] [-o prefix|raw] [-s ssh_options]
                 [-t ssh_timeout] fqdn1 [fqdnN]
 
 DESCRIPTION
@@ -28,6 +28,8 @@ OPTIONS
     -l login_name          Specifies the user to log in as on the remote machine
     -m max_connections     The max number of simultaneous connections to run
                              (default: 25)
+    -M                     Include the remote login MOTD/banner in the output
+                             (by default it is stripped out)
     -n node_file           The path to a file containing all of the fqdn's you
                            want to loop through
     -o output_format       Sets the output format:
@@ -79,6 +81,13 @@ OUTPUT_FORMAT="default"
 PROC_AGE_MAX_SEC=$((10*60))
 SSH_OPTIONS=""
 SSH_TIMEOUT=20
+STRIP_MOTD="true"
+
+# static sentinel used to delineate the remote login MOTD/banner from real
+# command output; it's static (not per-run) because the strip below cuts at
+# the *first* match, and the injected echo is always the first thing printed
+# after login - so a real command echoing this string later has no effect
+MOTD_MARKER="__LOOPER_OUTPUT_START_a1b2c3d4__"
 
 
 ################################################################################
@@ -121,11 +130,32 @@ openConn() {
     echo "$OPEN_CONN"
 }
 
+# builds the stdin stream fed to ssh: optionally prepends a marker command
+# (used to delineate the remote MOTD/banner from real output) followed by
+# the user's command file
+buildCmdStream() {
+  [ "$STRIP_MOTD" == "true" ] && echo "echo '$MOTD_MARKER'"
+  cat "$COMMAND_FILE"
+}
+
+# prints a server log, stripping everything through the first occurrence of
+# MOTD_MARKER (the remote login MOTD/banner) when STRIP_MOTD is enabled;
+# falls back to printing the whole file if the marker isn't present (e.g. the
+# ssh connection failed before login ever happened)
+renderLog() {
+  local LOG_FILE="$1"
+  if [ "$STRIP_MOTD" == "true" ] && grep -q "$MOTD_MARKER" "$LOG_FILE"; then
+    sed "1,/$MOTD_MARKER/d" "$LOG_FILE"
+  else
+    cat "$LOG_FILE"
+  fi
+}
+
 
 ################################################################################
 # arg parsing
 ################################################################################
-while getopts ":c:dhk:l:m:n:o:s:t:" OPTNAME; do
+while getopts ":c:dhk:l:m:Mn:o:s:t:" OPTNAME; do
   case "$OPTNAME" in
     "c")
       if [ ! -f "$OPTARG" ] || [ ! -r "$OPTARG"  ]; then
@@ -162,6 +192,9 @@ while getopts ":c:dhk:l:m:n:o:s:t:" OPTNAME; do
         exit 1
       fi
       MAX_CONNECTIONS="$OPTARG"
+      ;;
+    "M")
+      STRIP_MOTD="false"
       ;;
     "n")
       if [ -f $OPTARG ]; then
@@ -290,14 +323,14 @@ for SERVER in $SERVERS; do
     # TODO: refactor this to send the exit status to a case statement so that
     # i can parse the output for any status code, and act accordingly like,
     # having the ability to output the exit status in the cli output/log
-    if [ $( ssh $SSH_OPTIONS \
+    if [ $( buildCmdStream | ssh $SSH_OPTIONS \
               -t \
               -q \
               -oconnecttimeout=${SSH_TIMEOUT} \
               -oBatchMode=yes \
               -oStrictHostKeyChecking=no \
               -l $LOGIN_USER \
-              $SERVER < $COMMAND_FILE >> "$SERVER_LOG" 2>&1 ; echo "$?") -eq 255 ]; then
+              $SERVER >> "$SERVER_LOG" 2>&1 ; echo "$?") -eq 255 ]; then
       echo "SSH_CONNECTION_ERROR" >> "$SERVER_LOG"
    # these vars can't be calculated in real time like this, since the ssh is background'd
    #  (( SSH_FAIL_CNT++ ))
@@ -350,10 +383,10 @@ if [ "$DRYRUN" == "false" ]; then
     FQDN=$(echo $LOG_FILE | sed "s|$SERVER_LOG_PREFIX.\(.*\).log|\1|")
     case "$OUTPUT_FORMAT" in
       raw)
-        cat $LOG_FILE
+        renderLog "$LOG_FILE"
         ;;
       prefix)
-        cat $LOG_FILE | sed "s/^/$FQDN: /"
+        renderLog "$LOG_FILE" | sed "s/^/$FQDN: /"
         ;;
       *)
         echo '┌──────────────────────────────────────────────────────────────────────────────┐'
@@ -367,7 +400,7 @@ if [ "$DRYRUN" == "false" ]; then
         POS=$(( 24 + FQDN_LEN ))
         #echo "/                        $FQDN${BORDER:POS}"
         echo "│                        $FQDN${BORDER:POS}"
-        cat $LOG_FILE
+        renderLog "$LOG_FILE"
         #echo '\                                                                              /'
         #echo "  '--------------------------------------------------------------------------'"
         echo '│                                                                              │'
